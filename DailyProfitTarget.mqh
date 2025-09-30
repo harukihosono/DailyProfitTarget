@@ -304,6 +304,39 @@ struct PositionInfo
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
+//| フィルター済みポジション数を取得                                  |
+//+------------------------------------------------------------------+
+int GetFilteredPositionCount()
+{
+   int count = 0;
+   for(int i = 0; i < DPM_OrdersTotal(); i++)
+   {
+      if(!DPM_OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
+         continue;
+
+      // ポジションタイプチェック（ペンディングオーダーを除外）
+      int type = DPM_OrderType();
+      if(type != OP_BUY && type != OP_SELL)
+         continue;
+
+      // マジックナンバーフィルター
+      if(MagicNumber != 0)
+      {
+#ifdef __MQL5__
+         long posMagic = PositionGetInteger(POSITION_MAGIC);
+#else
+         int posMagic = OrderMagicNumber();
+#endif
+         if(posMagic != MagicNumber)
+            continue;
+      }
+
+      count++;
+   }
+   return count;
+}
+
+//+------------------------------------------------------------------+
 //| 現在の日付を取得（タイムゾーン調整済み）                          |
 //+------------------------------------------------------------------+
 int GetCurrentDay()
@@ -347,6 +380,18 @@ void DPM_Init()
       Alert("DailyProfitTarget: 目標金額が小さすぎるか0です。EAを停止します。");
       ExpertRemove();
       return;
+   }
+
+   if(MaxRetries < 1)
+   {
+      Print("WARNING: MaxRetries is too small (", MaxRetries, "). Setting to default value 3.");
+      MaxRetries = 3;
+   }
+
+   if(RetryDelay < 100)
+   {
+      Print("WARNING: RetryDelay is too small (", RetryDelay, " ms). Setting to minimum 100ms.");
+      RetryDelay = 100;
    }
 
    // 現在の日付を取得（タイムゾーン調整済み）
@@ -436,7 +481,7 @@ void DPM_OnTick()
       if(g_pendingStopStartTime == 0)
          g_pendingStopStartTime = TimeCurrent();
 
-      int remainingPositions = DPM_OrdersTotal();
+      int remainingPositions = GetFilteredPositionCount();
 
       if(remainingPositions == 0)
       {
@@ -444,11 +489,11 @@ void DPM_OnTick()
 
          // 停止処理中に新規ポジションが開かれていないか確認
          Sleep(500);  // 短い待機
-         int newPositions = DPM_OrdersTotal();
+         int newPositions = GetFilteredPositionCount();
 
          if(newPositions > 0)
          {
-            Print("WARNING: ", newPositions, " new position(s) opened during AutoTrading disable");
+            Print("WARNING: ", newPositions, " new filtered position(s) opened during AutoTrading disable");
             Print("WARNING: Re-enabling AutoTrading and continuing wait");
             EnableAutoTrading();
             g_pendingStopStartTime = TimeCurrent();  // タイマーリセット
@@ -457,7 +502,7 @@ void DPM_OnTick()
          {
             g_pendingAutoTradingStop = false;
             g_pendingStopStartTime = 0;
-            Print("All positions closed. AutoTrading disabled successfully.");
+            Print("All filtered positions closed. AutoTrading disabled successfully.");
          }
       }
       else if(TimeCurrent() - g_pendingStopStartTime > 60)
@@ -719,26 +764,7 @@ void CloseAllPositions()
    }
 
    // 最終結果
-   int remaining = 0;
-   for(int i = 0; i < DPM_OrdersTotal(); i++)
-   {
-      if(DPM_OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
-      {
-         if(MagicNumber == 0)
-         {
-            remaining++;
-         }
-         else
-         {
-#ifdef __MQL5__
-            if(PositionGetInteger(POSITION_MAGIC) == MagicNumber)
-#else
-            if(OrderMagicNumber() == MagicNumber)
-#endif
-               remaining++;
-         }
-      }
-   }
+   int remaining = GetFilteredPositionCount();
 
    if(remaining > 0)
    {
