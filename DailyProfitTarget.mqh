@@ -74,6 +74,10 @@ double g_lastDisplayedBalance = 0;                   // 前回表示した残高
 double g_lastDisplayedProfit = 0;                    // 前回表示した利益
 double g_lastDisplayedProgress = 0;                  // 前回表示した進捗率
 
+// 検証済み入力パラメータ
+int g_maxRetries = 3;                                // 検証済みリトライ回数
+int g_retryDelay = 1000;                             // 検証済みリトライ間隔
+
 //+------------------------------------------------------------------+
 //| アカウント情報関数ラッパー                                      |
 //+------------------------------------------------------------------+
@@ -382,16 +386,20 @@ void DPM_Init()
       return;
    }
 
-   if(MaxRetries < 1)
+   // 入力パラメータを検証してグローバル変数に格納
+   g_maxRetries = MaxRetries;
+   g_retryDelay = RetryDelay;
+
+   if(g_maxRetries < 1)
    {
       Print("WARNING: MaxRetries is too small (", MaxRetries, "). Setting to default value 3.");
-      MaxRetries = 3;
+      g_maxRetries = 3;
    }
 
-   if(RetryDelay < 100)
+   if(g_retryDelay < 100)
    {
       Print("WARNING: RetryDelay is too small (", RetryDelay, " ms). Setting to minimum 100ms.");
-      RetryDelay = 100;
+      g_retryDelay = 100;
    }
 
    // 現在の日付を取得（タイムゾーン調整済み）
@@ -436,7 +444,7 @@ void DPM_Init()
    Print("Daily start balance: ", DoubleToString(g_dailyStartBalance, 2));
    Print("Daily target amount: ", DoubleToString(DailyTargetAmount, 2));
    Print("Target action: ", (TargetAction == ACTION_CLOSE_AND_STOP ? "Close all + Stop" : "Stop only"));
-   Print("Max retry attempts: ", MaxRetries);
+   Print("Max retry attempts: ", g_maxRetries);
    Print("Magic number filter: ", MagicNumber == 0 ? "Disabled (all positions)" : IntegerToString(MagicNumber));
    Print("Timezone offset: ", TimezoneOffset, " hours");
    Print("===========================================");
@@ -629,11 +637,11 @@ void OnTargetReached(double profit)
 //+------------------------------------------------------------------+
 void CloseAllPositions()
 {
-   int maxConsecutiveFailures = MaxRetries;
+   int maxConsecutiveFailures = g_maxRetries;
    int consecutiveFailures = 0;
    int totalClosed = 0;
    int totalAttempts = 0;
-   const int MAX_TOTAL_ATTEMPTS = MaxRetries * 10;  // 絶対上限
+   const int MAX_TOTAL_ATTEMPTS = g_maxRetries * 10;  // 絶対上限
 
    Print("Starting CloseAllPositions");
    Print("Magic number filter: ", MagicNumber == 0 ? "None (all positions)" : IntegerToString(MagicNumber));
@@ -749,7 +757,7 @@ void CloseAllPositions()
       if(closedThisRound > 0)
       {
          consecutiveFailures = 0;  // 進捗があればリセット
-         Sleep(RetryDelay / 2);
+         Sleep(g_retryDelay / 2);
       }
       else
       {
@@ -758,7 +766,7 @@ void CloseAllPositions()
 
          if(consecutiveFailures < maxConsecutiveFailures)
          {
-            Sleep(RetryDelay);
+            Sleep(g_retryDelay);
          }
       }
    }
