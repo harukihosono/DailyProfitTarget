@@ -57,10 +57,11 @@ input int RetryDelay = 1000;                          // リトライ間隔(ミ�
 //| グローバル変数                                                  |
 //+------------------------------------------------------------------+
 double g_dailyStartBalance = 0;                       // 日次開始時残高
-datetime g_currentDay = 0;                                 // 現在の日付(YYYYMMDD形式)
+int g_currentDay = 0;                                 // 現在の日付(YYYYMMDD形式)
 bool g_targetReached = false;                         // 目標達成フラグ
 bool g_eaStopped = false;                            // EA停止フラグ
 bool g_pendingAutoTradingStop = false;               // 自動売買停止待機フラグ
+datetime g_pendingStopStartTime = 0;                 // 自動売買停止待機開始時刻
 string g_prefix = "DPM_";                            // オブジェクト名プレフィックス
 
 //+------------------------------------------------------------------+
@@ -208,16 +209,35 @@ struct PositionInfo
 //+------------------------------------------------------------------+
 void DPM_Init()
 {
+   // 入力パラメータ検証
+   if(MathAbs(DailyTargetAmount) < 0.01)
+   {
+      Print("ERROR: DailyTargetAmount is too small or zero (", DailyTargetAmount, "). EA cannot function properly.");
+      Alert("DailyProfitTarget: 目標金額が小さすぎるか0です。EAを停止します。");
+      ExpertRemove();
+      return;
+   }
 
-   g_currentDay = TimeCurrent();
-   
+   // 現在の日付をYYYYMMDD形式で初期化
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(), dt);
+   g_currentDay = dt.year * 10000 + dt.mon * 100 + dt.day;
+
    // 開始残高を現在の残高で初期化
    g_dailyStartBalance = DPM_AccountBalance();
-   
+
    // フラグ初期化
    g_targetReached = false;
    g_eaStopped = false;
    g_pendingAutoTradingStop = false;
+   g_pendingStopStartTime = 0;
+
+#ifdef __MQL5__
+   // CTrade設定
+   g_trade.SetDeviationInPoints(10);
+   g_trade.SetAsyncMode(false);  // 同期実行を保証
+   g_trade.LogLevel(LOG_LEVEL_ERRORS);
+#endif
 
    // 表示初期化
    CreateDisplay();
@@ -265,11 +285,23 @@ void DPM_OnTick()
    // 自動売買停止待機中の場合、ポジション・オーダー確認
    if(g_pendingAutoTradingStop)
    {
+      // タイムアウトチェック（60秒）
+      if(g_pendingStopStartTime == 0)
+         g_pendingStopStartTime = TimeCurrent();
+
       if(DPM_OrdersTotal() == 0)
       {
          DisableAutoTrading();
          g_pendingAutoTradingStop = false;
+         g_pendingStopStartTime = 0;
          Print("All positions closed. AutoTrading disabled.");
+      }
+      else if(TimeCurrent() - g_pendingStopStartTime > 60)
+      {
+         Print("WARNING: Timeout waiting for positions to close (60 seconds). Disabling AutoTrading anyway.");
+         DisableAutoTrading();
+         g_pendingAutoTradingStop = false;
+         g_pendingStopStartTime = 0;
       }
       UpdateDisplay();
       return;
@@ -282,9 +314,9 @@ void DPM_OnTick()
       return;
    }
 
-   // 日次利益計算
-   double currentEquity = DPM_AccountEquity();
-   double dailyProfit = currentEquity - g_dailyStartBalance;
+   // 日次利益計算（Balance基準：確定損益のみ）
+   double currentBalance = DPM_AccountBalance();
+   double dailyProfit = currentBalance - g_dailyStartBalance;
 
    // 目標達成チェック
    if(!g_targetReached && dailyProfit >= DailyTargetAmount)
@@ -312,6 +344,7 @@ void OnNewDay(int newDay)
    g_targetReached = false;
    g_eaStopped = false;
    g_pendingAutoTradingStop = false;
+   g_pendingStopStartTime = 0;
 
    // 自動売買を再開
    EnableAutoTrading();
@@ -470,13 +503,13 @@ void CreateDisplay()
 //+------------------------------------------------------------------+
 void UpdateDisplay()
 {
-   double currentEquity = DPM_AccountEquity();
-   double dailyProfit = currentEquity - g_dailyStartBalance;
+   double currentBalance = DPM_AccountBalance();
+   double dailyProfit = currentBalance - g_dailyStartBalance;
    double remaining = DailyTargetAmount - dailyProfit;
 
    // 進捗率計算（ゼロ除算対策）
    double progressPercent = 0;
-   if(DailyTargetAmount > 0.01 || DailyTargetAmount < -0.01)  // ゼロチェック
+   if(MathAbs(DailyTargetAmount) > 0.01)  // ゼロチェック
    {
       progressPercent = (dailyProfit / DailyTargetAmount) * 100.0;
       progressPercent = MathMin(MathMax(progressPercent, -100.0), 100.0);
@@ -490,7 +523,7 @@ void UpdateDisplay()
 
    // テキスト更新
    UpdateLabel(g_prefix + "StartBalance", "開始残高: " + DoubleToString(g_dailyStartBalance, 2), clrSilver);
-   UpdateLabel(g_prefix + "CurrentBalance", "現在残高: " + DoubleToString(currentEquity, 2), clrSilver);
+   UpdateLabel(g_prefix + "CurrentBalance", "現在残高: " + DoubleToString(currentBalance, 2), clrSilver);
    UpdateLabel(g_prefix + "DailyProfit", "日次利益: " + DoubleToString(dailyProfit, 2), profitColor);
    UpdateLabel(g_prefix + "Target", "目標金額: " + DoubleToString(DailyTargetAmount, 2), clrGold);
    UpdateLabel(g_prefix + "Progress", "進捗率: " + DoubleToString(progressPercent, 1) + "%", progressColor);
