@@ -683,7 +683,11 @@ void CloseAllPositions()
 
          // チケット収集
          ArrayResize(tickets, ticketCount + 1);
-         tickets[ticketCount] = DPM_OrderTicket();
+#ifdef __MQL5__
+         tickets[ticketCount] = (ulong)DPM_OrderTicket();
+#else
+         tickets[ticketCount] = (int)DPM_OrderTicket();
+#endif
          ticketCount++;
       }
 
