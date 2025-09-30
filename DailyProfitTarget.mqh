@@ -923,33 +923,38 @@ void UpdateDisplay()
 
    double remaining = DailyTargetAmount - dailyProfit;
 
-   // 色設定
-   color profitColor = (dailyProfit >= 0) ? clrLime : clrRed;
-   color progressColor = (progressPercent >= 100) ? clrLime :
-                        (progressPercent >= 50) ? clrCyan :
-                        (progressPercent >= 0) ? clrYellow : clrRed;
-
-   // テキスト更新
-   UpdateLabel(g_prefix + "StartBalance", "開始残高: " + DoubleToString(g_dailyStartBalance, 2), clrSilver);
-   UpdateLabel(g_prefix + "CurrentBalance", "現在残高: " + DoubleToString(currentBalance, 2), clrSilver);
-   UpdateLabel(g_prefix + "DailyProfit", "日次利益: " + DoubleToString(dailyProfit, 2), profitColor);
-   UpdateLabel(g_prefix + "Target", "目標金額: " + DoubleToString(DailyTargetAmount, 2), clrGold);
-   UpdateLabel(g_prefix + "Progress", "進捗率: " + DoubleToString(progressPercent, 1) + "%", progressColor);
-
-   if(!g_targetReached)
+   // 目標達成時は全て緑色、通常時は個別の色設定
+   if(g_targetReached)
    {
-      UpdateLabel(g_prefix + "Remaining", "残り: " + DoubleToString(remaining, 2), clrSilver);
-      UpdateLabel(g_prefix + "Status", "状態: 稼働中", clrLime);
+      // 目標達成時：すべて緑色
+      UpdateLabel(g_prefix + "Title", "■ 日次利益管理", clrLime);
+      UpdateLabel(g_prefix + "StartBalance", "開始残高: " + DoubleToString(g_dailyStartBalance, 2), clrLime);
+      UpdateLabel(g_prefix + "CurrentBalance", "現在残高: " + DoubleToString(currentBalance, 2), clrLime);
+      UpdateLabel(g_prefix + "DailyProfit", "日次利益: " + DoubleToString(dailyProfit, 2), clrLime);
+      UpdateLabel(g_prefix + "Target", "目標金額: " + DoubleToString(DailyTargetAmount, 2), clrLime);
+      UpdateLabel(g_prefix + "Progress", "進捗率: " + DoubleToString(progressPercent, 1) + "%", clrLime);
+      UpdateLabel(g_prefix + "Remaining", "目標達成!", clrLime);
+      UpdateLabel(g_prefix + "Status", "状態: 目標達成(停止)", clrLime);
+      UpdateLabel(g_prefix + "StartTime", "開始: " + TimeToString(g_dailyStartTime + TimezoneOffset * 3600, TIME_DATE|TIME_MINUTES), clrLime);
    }
    else
    {
-      UpdateLabel(g_prefix + "Remaining", "目標達成!", clrLime);
-      UpdateLabel(g_prefix + "Status", "状態: 目標達成(停止)", clrGold);
-   }
+      // 通常時：個別の色設定
+      color profitColor = (dailyProfit >= 0) ? clrLime : clrRed;
+      color progressColor = (progressPercent >= 100) ? clrLime :
+                           (progressPercent >= 50) ? clrCyan :
+                           (progressPercent >= 0) ? clrYellow : clrRed;
 
-   // 開始時刻表示
-   datetime displayTime = g_dailyStartTime + TimezoneOffset * 3600;
-   UpdateLabel(g_prefix + "StartTime", "開始: " + TimeToString(displayTime, TIME_DATE|TIME_MINUTES), clrGray);
+      UpdateLabel(g_prefix + "Title", "■ 日次利益管理", clrWhite);
+      UpdateLabel(g_prefix + "StartBalance", "開始残高: " + DoubleToString(g_dailyStartBalance, 2), clrSilver);
+      UpdateLabel(g_prefix + "CurrentBalance", "現在残高: " + DoubleToString(currentBalance, 2), clrSilver);
+      UpdateLabel(g_prefix + "DailyProfit", "日次利益: " + DoubleToString(dailyProfit, 2), profitColor);
+      UpdateLabel(g_prefix + "Target", "目標金額: " + DoubleToString(DailyTargetAmount, 2), clrGold);
+      UpdateLabel(g_prefix + "Progress", "進捗率: " + DoubleToString(progressPercent, 1) + "%", progressColor);
+      UpdateLabel(g_prefix + "Remaining", "残り: " + DoubleToString(remaining, 2), clrSilver);
+      UpdateLabel(g_prefix + "Status", "状態: 稼働中", clrLime);
+      UpdateLabel(g_prefix + "StartTime", "開始: " + TimeToString(g_dailyStartTime + TimezoneOffset * 3600, TIME_DATE|TIME_MINUTES), clrGray);
+   }
 }
 
 //+------------------------------------------------------------------+
