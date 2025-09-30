@@ -47,7 +47,7 @@ sinput string s2 = "=== 表示設定 ===";
 input int DisplayX = 10;                              // 表示位置X座標
 input int DisplayY = 25;                              // 表示位置Y座標
 input int FontSize = 10;                              // フォントサイズ
-input string FontName = "Arial";                      // フォント名
+input string FontName = "MS Gothic";                  // フォント名（日本語対応）
 
 sinput string s3 = "=== 決済設定 ===";
 input int MaxRetries = 3;                             // 決済リトライ回数
@@ -895,7 +895,14 @@ void CreateLabel(string name, string text, int x, int y, color clr, int size, bo
       ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
       ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
       ObjectSetInteger(0, name, OBJPROP_FONTSIZE, size);
-      ObjectSetString(0, name, OBJPROP_FONT, bold ? FontName + " Bold" : FontName);
+
+      // 日本語対応フォント設定
+      string fontToUse = FontName;
+      if(bold && (FontName == "Arial" || FontName == "Tahoma"))
+      {
+         fontToUse = FontName + " Bold";
+      }
+      ObjectSetString(0, name, OBJPROP_FONT, fontToUse);
       ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    }
 
