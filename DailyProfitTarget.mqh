@@ -109,6 +109,51 @@ int DPM_OrdersTotal()
 }
 
 //+------------------------------------------------------------------+
+//| 現在のオープンポジションの含み損益を取得                          |
+//+------------------------------------------------------------------+
+double DPM_OrderProfit()
+{
+#ifdef __MQL5__
+   return PositionGetDouble(POSITION_PROFIT);
+#else
+   return OrderProfit() + OrderSwap() + OrderCommission();
+#endif
+}
+
+//+------------------------------------------------------------------+
+//| フィルター済みポジションの含み損益合計を取得                      |
+//+------------------------------------------------------------------+
+double GetFilteredPositionsProfit()
+{
+   double totalProfit = 0;
+   for(int i = 0; i < DPM_OrdersTotal(); i++)
+   {
+      if(!DPM_OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
+         continue;
+
+      // ポジションタイプチェック（ペンディングオーダーを除外）
+      int type = DPM_OrderType();
+      if(type != OP_BUY && type != OP_SELL)
+         continue;
+
+      // マジックナンバーフィルター
+      if(MagicNumber != 0)
+      {
+#ifdef __MQL5__
+         long posMagic = PositionGetInteger(POSITION_MAGIC);
+#else
+         int posMagic = OrderMagicNumber();
+#endif
+         if(posMagic != MagicNumber)
+            continue;
+      }
+
+      totalProfit += DPM_OrderProfit();
+   }
+   return totalProfit;
+}
+
+//+------------------------------------------------------------------+
 //| MQL5用関数ラッパー                                              |
 //+------------------------------------------------------------------+
 #ifdef __MQL5__
@@ -553,9 +598,10 @@ void DPM_OnTick()
       return;
    }
 
-   // 日次利益計算（Balance基準：確定損益のみ）
+   // 日次利益計算（Balance + オープンポジションの含み損益）
    double currentBalance = DPM_AccountBalance();
-   double dailyProfit = currentBalance - g_dailyStartBalance;
+   double openPositionsProfit = GetFilteredPositionsProfit();
+   double dailyProfit = (currentBalance - g_dailyStartBalance) + openPositionsProfit;
 
    // 目標達成チェック
    if(!g_targetReached && dailyProfit >= DailyTargetAmount)
@@ -848,7 +894,8 @@ void CreateDisplay()
 void UpdateDisplay()
 {
    double currentBalance = DPM_AccountBalance();
-   double dailyProfit = currentBalance - g_dailyStartBalance;
+   double openPositionsProfit = GetFilteredPositionsProfit();
+   double dailyProfit = (currentBalance - g_dailyStartBalance) + openPositionsProfit;
 
    // 進捗率計算（ゼロ除算対策）
    double progressPercent = 0;
