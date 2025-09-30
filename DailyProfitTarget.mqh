@@ -61,6 +61,7 @@ input int TimezoneOffset = 0;                         // サーバー時刻か�
 //| グローバル変数                                                  |
 //+------------------------------------------------------------------+
 double g_dailyStartBalance = 0;                       // 日次開始時残高
+datetime g_dailyStartTime = 0;                        // 日次開始時刻
 int g_currentDay = 0;                                 // 現在の日付(YYYYMMDD形式)
 bool g_targetReached = false;                         // 目標達成フラグ
 bool g_eaStopped = false;                            // EA停止フラグ
@@ -359,8 +360,9 @@ void DPM_Init()
       Print("INFO: Timezone offset: ", TimezoneOffset, " hours from server time");
    }
 
-   // 開始残高を現在の残高で初期化
+   // 開始残高と開始時刻を初期化
    g_dailyStartBalance = DPM_AccountBalance();
+   g_dailyStartTime = TimeCurrent();
 
    // フラグ初期化
    g_targetReached = false;
@@ -439,9 +441,24 @@ void DPM_OnTick()
       if(remainingPositions == 0)
       {
          DisableAutoTrading();
-         g_pendingAutoTradingStop = false;
-         g_pendingStopStartTime = 0;
-         Print("All positions closed. AutoTrading disabled successfully.");
+
+         // 停止処理中に新規ポジションが開かれていないか確認
+         Sleep(500);  // 短い待機
+         int newPositions = DPM_OrdersTotal();
+
+         if(newPositions > 0)
+         {
+            Print("WARNING: ", newPositions, " new position(s) opened during AutoTrading disable");
+            Print("WARNING: Re-enabling AutoTrading and continuing wait");
+            EnableAutoTrading();
+            g_pendingStopStartTime = TimeCurrent();  // タイマーリセット
+         }
+         else
+         {
+            g_pendingAutoTradingStop = false;
+            g_pendingStopStartTime = 0;
+            Print("All positions closed. AutoTrading disabled successfully.");
+         }
       }
       else if(TimeCurrent() - g_pendingStopStartTime > 60)
       {
@@ -504,6 +521,7 @@ void OnNewDay(int newDay)
    // 新しい日の設定
    g_currentDay = newDay;
    g_dailyStartBalance = finalBalance;
+   g_dailyStartTime = TimeCurrent();
 
    // フラグリセット（新しい日には自動的に再開）
    g_targetReached = false;
@@ -562,40 +580,38 @@ void OnTargetReached(double profit)
 }
 
 //+------------------------------------------------------------------+
-//| 全ポジション決済（改良版：競合状態を解消）                        |
+//| 全ポジション決済（改良版：チケットベースで競合状態を完全解消）      |
 //+------------------------------------------------------------------+
 void CloseAllPositions()
 {
-   int maxAttempts = MaxRetries;
-   int attempt = 0;
+   int maxConsecutiveFailures = MaxRetries;
+   int consecutiveFailures = 0;
    int totalClosed = 0;
+   int totalAttempts = 0;
+   const int MAX_TOTAL_ATTEMPTS = MaxRetries * 10;  // 絶対上限
 
-   Print("Starting CloseAllPositions - Initial position count: ", DPM_OrdersTotal());
+   Print("Starting CloseAllPositions");
+   Print("Magic number filter: ", MagicNumber == 0 ? "None (all positions)" : IntegerToString(MagicNumber));
 
-   while(attempt < maxAttempts)
+   while(consecutiveFailures < maxConsecutiveFailures && totalAttempts < MAX_TOTAL_ATTEMPTS)
    {
+      totalAttempts++;
+
+      // ステップ1: フィルター済みチケットを収集
+#ifdef __MQL5__
+      ulong tickets[];
+#else
+      int tickets[];
+#endif
+      int ticketCount = 0;
       int total = DPM_OrdersTotal();
 
-      if(total == 0)
+      for(int i = 0; i < total; i++)
       {
-         Print("All positions successfully closed. Total closed: ", totalClosed);
-         return;
-      }
-
-      bool anySuccess = false;
-      int closedThisRound = 0;
-
-      // 逆順で処理（インデックスの変化に対応）
-      for(int i = total - 1; i >= 0; i--)
-      {
-         // 最新のポジション情報を取得
          if(!DPM_OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
-         {
-            Print("WARNING: Failed to select position at index ", i);
             continue;
-         }
 
-         // マジックナンバーフィルター
+         // マジックナンバーフィルター（即座にチェック）
          if(MagicNumber != 0)
          {
 #ifdef __MQL5__
@@ -604,99 +620,135 @@ void CloseAllPositions()
             int posMagic = OrderMagicNumber();
 #endif
             if(posMagic != MagicNumber)
-               continue;  // 指定されたマジックナンバー以外はスキップ
+               continue;
          }
 
-         // ポジション情報を直前に取得（常に最新）
+         // ポジションタイプチェック
          int type = DPM_OrderType();
          if(type != OP_BUY && type != OP_SELL)
             continue;
 
-#ifdef __MQL5__
-         ulong ticket = DPM_OrderTicket();
-#else
-         int ticket = DPM_OrderTicket();
-#endif
-         string symbol = DPM_OrderSymbol();
-         double lots = DPM_OrderLots();  // 最新のロット数
+         // チケット収集
+         ArrayResize(tickets, ticketCount + 1);
+         tickets[ticketCount] = DPM_OrderTicket();
+         ticketCount++;
+      }
 
-         // 最新の決済価格を取得
+      if(ticketCount == 0)
+      {
+         Print("All target positions closed. Total closed: ", totalClosed);
+         return;
+      }
+
+      Print("Round ", totalAttempts, ": Found ", ticketCount, " positions to close");
+
+      // ステップ2: チケットベースで決済（インデックス変化の影響を受けない）
+      int closedThisRound = 0;
+
+      for(int i = 0; i < ticketCount; i++)
+      {
+         // チケットで選択（常に最新状態）
+         if(!DPM_OrderSelect(tickets[i], SELECT_BY_TICKET))
+         {
+            Print("Position #", tickets[i], " no longer exists (already closed)");
+            closedThisRound++;
+            continue;
+         }
+
+         // 最新のポジション情報取得
+         string symbol = DPM_OrderSymbol();
+         int type = DPM_OrderType();
+         double lots = DPM_OrderLots();
+
+         // 最新価格取得
          double closePrice = (type == OP_BUY) ?
                             DPM_MarketInfo(symbol, MODE_BID) :
                             DPM_MarketInfo(symbol, MODE_ASK);
 
-         // 価格が有効か確認
          if(closePrice <= 0)
          {
-            Print("ERROR: Invalid close price for ", symbol, " (", closePrice, ")");
+            Print("ERROR: Invalid price for ", symbol);
             continue;
          }
 
          // 決済実行
-         bool success = DPM_OrderClose(ticket, lots, closePrice, 3);
+         bool success = DPM_OrderClose(tickets[i], lots, closePrice, 3);
 
          if(success)
          {
-            anySuccess = true;
             closedThisRound++;
             totalClosed++;
-            Print("Successfully closed order #", ticket, " (", symbol, " ",
+            Print("Closed #", tickets[i], " (", symbol, " ",
                   (type == OP_BUY ? "BUY" : "SELL"), " ", lots, " lots)");
-            Sleep(100);  // 次の決済まで短い遅延
+            Sleep(100);
          }
          else
          {
             int error = GetLastError();
 
-            // リクオートエラーの場合は次のラウンドで再試行
-            if(error == 138 || error == 135)  // Requote or Price changed
+            if(error == 138 || error == 135)
             {
-               Print("Requote/Price change for #", ticket, " - will retry with fresh price");
+               Print("Requote for #", tickets[i], " - will retry");
             }
             else
             {
-               Print("Failed to close order #", ticket,
-                     " Symbol: ", symbol,
-                     " Type: ", (type == OP_BUY ? "BUY" : "SELL"),
-                     " Lots: ", lots,
-                     " Price: ", closePrice,
+               Print("Failed to close #", tickets[i], " ", symbol,
                      " Error: ", error, " - ", ErrorDescription(error));
             }
          }
       }
 
-      Print("Close round ", attempt + 1, " completed. Closed: ", closedThisRound,
-            " Remaining: ", DPM_OrdersTotal());
+      Print("Round ", totalAttempts, " result: Closed ", closedThisRound, "/", ticketCount);
 
-      // 進捗があった場合はカウンターリセット
-      if(anySuccess)
+      // 進捗チェック
+      if(closedThisRound > 0)
       {
-         attempt = 0;  // 進捗があればリトライカウントをリセット
-         Sleep(RetryDelay / 2);  // 次のラウンド前に短い待機
+         consecutiveFailures = 0;  // 進捗があればリセット
+         Sleep(RetryDelay / 2);
       }
-      else if(DPM_OrdersTotal() > 0)
+      else
       {
-         // 進捗がない場合のみカウント
-         attempt++;
-         if(attempt < maxAttempts)
+         consecutiveFailures++;
+         Print("No progress. Consecutive failures: ", consecutiveFailures, "/", maxConsecutiveFailures);
+
+         if(consecutiveFailures < maxConsecutiveFailures)
          {
-            Print("No progress in this round. Retry attempt ", attempt, " of ", maxAttempts);
             Sleep(RetryDelay);
          }
       }
    }
 
-   // 最終確認
-   int remaining = DPM_OrdersTotal();
+   // 最終結果
+   int remaining = 0;
+   for(int i = 0; i < DPM_OrdersTotal(); i++)
+   {
+      if(DPM_OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
+      {
+         if(MagicNumber == 0)
+         {
+            remaining++;
+         }
+         else
+         {
+#ifdef __MQL5__
+            if(PositionGetInteger(POSITION_MAGIC) == MagicNumber)
+#else
+            if(OrderMagicNumber() == MagicNumber)
+#endif
+               remaining++;
+         }
+      }
+   }
+
    if(remaining > 0)
    {
-      Print("WARNING: ", remaining, " positions could not be closed after all attempts");
-      Print("WARNING: Total successfully closed: ", totalClosed);
-      Alert("DailyProfitTarget: ", remaining, " positions failed to close! Please close manually.");
+      Print("WARNING: ", remaining, " target positions remain after ", totalAttempts, " attempts");
+      Print("Total closed: ", totalClosed);
+      Alert("DailyProfitTarget: ", remaining, " positions failed to close! Manual intervention required.");
    }
    else
    {
-      Print("All positions closed successfully. Total: ", totalClosed);
+      Print("SUCCESS: All target positions closed. Total: ", totalClosed, " in ", totalAttempts, " attempts");
    }
 }
 
@@ -791,6 +843,10 @@ void UpdateDisplay()
       UpdateLabel(g_prefix + "Remaining", "目標達成!", clrLime);
       UpdateLabel(g_prefix + "Status", "状態: 目標達成(停止)", clrGold);
    }
+
+   // 開始時刻表示
+   datetime displayTime = g_dailyStartTime + TimezoneOffset * 3600;
+   UpdateLabel(g_prefix + "StartTime", "開始: " + TimeToString(displayTime, TIME_DATE|TIME_MINUTES), clrGray);
 }
 
 //+------------------------------------------------------------------+
