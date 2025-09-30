@@ -400,6 +400,57 @@ int GetFilteredPositionCount()
 }
 
 //+------------------------------------------------------------------+
+//| フィルター済みペンディングオーダー数を取得                          |
+//+------------------------------------------------------------------+
+int GetFilteredPendingOrderCount()
+{
+#ifdef __MQL5__
+   int count = 0;
+   int total = OrdersTotal();
+   for(int i = 0; i < total; i++)
+   {
+      ulong ticket = OrderGetTicket(i);
+      if(ticket == 0)
+         continue;
+
+      // マジックナンバーフィルター
+      if(MagicNumber != 0)
+      {
+         long orderMagic = OrderGetInteger(ORDER_MAGIC);
+         if(orderMagic != MagicNumber)
+            continue;
+      }
+
+      count++;
+   }
+   return count;
+#else
+   int count = 0;
+   for(int i = 0; i < OrdersTotal(); i++)
+   {
+      if(!DPM_OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
+         continue;
+
+      // ペンディングオーダーのみカウント
+      int type = DPM_OrderType();
+      if(type == OP_BUY || type == OP_SELL)
+         continue;
+
+      // マジックナンバーフィルター
+      if(MagicNumber != 0)
+      {
+         int orderMagic = OrderMagicNumber();
+         if(orderMagic != MagicNumber)
+            continue;
+      }
+
+      count++;
+   }
+   return count;
+#endif
+}
+
+//+------------------------------------------------------------------+
 //| 現在の日付を取得（タイムゾーン調整済み）                          |
 //+------------------------------------------------------------------+
 int GetCurrentDay()
@@ -549,18 +600,20 @@ void DPM_OnTick()
          g_pendingStopStartTime = TimeCurrent();
 
       int remainingPositions = GetFilteredPositionCount();
+      int remainingOrders = GetFilteredPendingOrderCount();
 
-      if(remainingPositions == 0)
+      if(remainingPositions == 0 && remainingOrders == 0)
       {
          DisableAutoTrading();
 
-         // 停止処理中に新規ポジションが開かれていないか確認
+         // 停止処理中に新規ポジション・オーダーが開かれていないか確認
          Sleep(500);  // 短い待機
          int newPositions = GetFilteredPositionCount();
+         int newOrders = GetFilteredPendingOrderCount();
 
-         if(newPositions > 0)
+         if(newPositions > 0 || newOrders > 0)
          {
-            Print("WARNING: ", newPositions, " new filtered position(s) opened during AutoTrading disable");
+            Print("WARNING: ", newPositions, " position(s) and ", newOrders, " order(s) opened during AutoTrading disable");
             Print("WARNING: Re-enabling AutoTrading and continuing wait");
             EnableAutoTrading();
             g_pendingStopStartTime = TimeCurrent();  // タイマーリセット
@@ -569,14 +622,14 @@ void DPM_OnTick()
          {
             g_pendingAutoTradingStop = false;
             g_pendingStopStartTime = 0;
-            Print("All filtered positions closed. AutoTrading disabled successfully.");
+            Print("All filtered positions and orders closed. AutoTrading disabled successfully.");
          }
       }
       else if(TimeCurrent() - g_pendingStopStartTime > 60)
       {
-         Print("WARNING: Timeout waiting for positions to close (60 seconds elapsed).");
-         Print("WARNING: ", remainingPositions, " positions still remain open.");
-         Print("WARNING: Disabling AutoTrading anyway. Please check positions manually!");
+         Print("WARNING: Timeout waiting for positions/orders to close (60 seconds elapsed).");
+         Print("WARNING: ", remainingPositions, " positions and ", remainingOrders, " orders still remain.");
+         Print("WARNING: Disabling AutoTrading anyway. Please check manually!");
          DisableAutoTrading();
          g_pendingAutoTradingStop = false;
          g_pendingStopStartTime = 0;
@@ -585,7 +638,7 @@ void DPM_OnTick()
       {
          // 待機中のステータス表示
          int elapsedTime = (int)(TimeCurrent() - g_pendingStopStartTime);
-         Print("Waiting for ", remainingPositions, " positions to close... (", elapsedTime, "/60 seconds)");
+         Print("Waiting for ", remainingPositions, " positions and ", remainingOrders, " orders to close... (", elapsedTime, "/60 seconds)");
       }
       UpdateDisplay();
       return;
@@ -680,9 +733,24 @@ void OnTargetReached(double profit)
       Print("Closing all positions...");
       CloseAllPositions();
 
-      // 全決済完了後に自動売買停止（ポジション・オーダーがなくなるまで待機）
-      g_pendingAutoTradingStop = true;
-      Print("EA stopped. Waiting for all positions to close before disabling AutoTrading. Will automatically restart tomorrow.");
+      // 決済後のポジション数とオーダー数を確認
+      int remainingPositions = GetFilteredPositionCount();
+      int remainingOrders = GetFilteredPendingOrderCount();
+
+      if(remainingPositions == 0 && remainingOrders == 0)
+      {
+         // 全決済完了：即座に自動売買停止
+         DisableAutoTrading();
+         Print("All positions and orders closed successfully. AutoTrading disabled. Will automatically restart tomorrow.");
+      }
+      else
+      {
+         // 一部ポジション・オーダーが残っている：自動売買停止待機状態へ
+         g_pendingAutoTradingStop = true;
+         Print("EA stopped. ", remainingPositions, " positions and ", remainingOrders, " orders remain.");
+         Print("Waiting for all positions and orders to close before disabling AutoTrading.");
+         Print("Will automatically restart tomorrow.");
+      }
    }
    else if(TargetAction == ACTION_STOP_ONLY)
    {
