@@ -129,6 +129,20 @@ bool DPM_OrderSelect(int index, int select, int pool = MODE_TRADES)
    return false;
 }
 
+// ulong版オーバーロード（チケット選択用）
+bool DPM_OrderSelect(ulong ticket, int select, int pool = MODE_TRADES)
+{
+   ResetLastError();
+
+   if(select == SELECT_BY_TICKET)
+   {
+      return PositionSelectByTicket(ticket);
+   }
+
+   Print("ERROR: DPM_OrderSelect(ulong) - Invalid select mode: ", select);
+   return false;
+}
+
 string DPM_OrderSymbol()
 {
    return PositionGetString(POSITION_SYMBOL);
@@ -729,7 +743,11 @@ void CloseAllPositions()
          }
 
          // 決済実行
+#ifdef __MQL5__
+         bool success = DPM_OrderClose((ulong)tickets[i], lots, closePrice, 3);
+#else
          bool success = DPM_OrderClose(tickets[i], lots, closePrice, 3);
+#endif
 
          if(success)
          {
